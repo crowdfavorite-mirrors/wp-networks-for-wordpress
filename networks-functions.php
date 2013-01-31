@@ -85,7 +85,7 @@ if(!function_exists('restore_current_site')) {
 	 * Return to the operational site after our operations
 	 */
 	function restore_current_site() {
-		global $tmpoldsitedetails, $wpdb, $site_id, $switched_site, $switched_site_stack;
+		global $tmpoldsitedetails, $wpdb, $site_id, $switched_site, $switched_site_stack, $current_site;
 
 		if ( !$switched_site )
 			return;
@@ -97,7 +97,7 @@ if(!function_exists('restore_current_site')) {
 
 		// backup
 
-		$prev_site_id = $wpdb->site_id;
+		$prev_site_id = $wpdb->siteid;
 
 		$wpdb->siteid = $site_id;
 		$current_site->id = $tmpoldsitedetails[ 'id' ];
@@ -177,7 +177,20 @@ if (!function_exists('add_site')) {
 			}
 			
 			if(!$skip_blog_setup) {
-				$new_blog_id = wpmu_create_blog($domain,$path,$blog_name,get_current_user_id(),'',(int)$new_site_id);
+				// there's an ongoing error with wpmu_create_blog that throws a warning if meta is not defined:
+				// http://core.trac.wordpress.org/ticket/20793
+				// temporary fix -- set from current blog's value
+				$new_blog_visibility = get_option( 'blog_public', false );
+				
+				$new_blog_id = wpmu_create_blog(
+					$domain,
+					$path,
+					$blog_name,
+					get_current_user_id(),
+					array( 'public' => $new_blog_visibility ),
+					(int)$new_site_id
+				);
+				
 				if(is_a($new_blog_id,'WP_Error')) {
 					return $new_blog_id;
 				}
@@ -332,9 +345,9 @@ if (!function_exists('delete_site')) {
 			if($blogs) {
 				foreach($blogs as $blog) {
 					if(RESCUE_ORPHANED_BLOGS && ENABLE_HOLDING_SITE) {
-						move_blog($blog->blog_id,0);
+						move_blog( $blog->blog_id, 0 );
 					} else {
-						wpmu_delete_blog($blog->blog_id,true);
+						wpmu_delete_blog( $blog->blog_id, true );
 					}
 				}
 			}
@@ -370,6 +383,7 @@ if(!function_exists('move_blog')) {
 			return new WP_Error('blog not exist',__('Site does not exist.','njsl-networks'));
 		}
 
+		/** If user requested moving site to its current network, just return that we did */
 		if((int)$new_site_id == $blog->site_id) { return true;	}
 		
 		$old_site_id = $blog->site_id;
@@ -400,8 +414,17 @@ if(!function_exists('move_blog')) {
 
 		if( is_subdomain_install() ) {
 
-			$exDom = substr($blog->domain,0,(strpos($blog->domain,'.')+1));
-			$domain = $exDom . $newSite->domain;
+			if( $blog->domain == $oldSite->domain ) {
+
+				/** If this site has no hostname component, just replace the domain name outright */
+				$domain = $newSite->domain;
+				
+			} else {
+
+				$exDom = substr( $blog->domain, 0, ( strpos( $blog->domain, '.' ) + 1 ) );
+				$domain = $exDom . $newSite->domain;
+				
+			}
 			
 		} else {
 
@@ -419,8 +442,8 @@ if(!function_exists('move_blog')) {
 			array(	'blog_id'	=> $blog->blog_id)
 		);
 			
-		if(!$update_result) {
-			return new WP_Error('blog_not_moved',__('Site could not be moved.'));
+		if( ! $update_result ) {
+			return new WP_Error( 'blog_not_moved', __( 'Site could not be moved.', 'njsl-networks' ) );
 		}
 		
 		/** change relevant blog options */
@@ -429,11 +452,14 @@ if(!function_exists('move_blog')) {
 		$oldDomain = $oldSite->domain . $oldSite->path;
 		$newDomain = $newSite->domain . $newSite->path;
 
-		foreach($url_dependent_blog_options as $option_name) {
+		foreach( $url_dependent_blog_options as $option_name ) {
 			$option = $wpdb->get_row("SELECT * FROM $optionTable WHERE option_name='" . $option_name . "'");
 			$newValue = str_replace($oldDomain,$newDomain,$option->option_value);
 			update_blog_option($blog->blog_id,$option_name,$newValue);
 		}
+		
+		// Delete rewrite rules for site at old URL
+		delete_blog_option( $blog->blog_id, 'rewrite_rules' );
 		
 		do_action( 'wpmu_move_blog' , $blog_id, $old_site_id, $new_site_id );
 		do_action( 'wpms_move_site' , $blog_id, $old_site_id, $new_site_id );

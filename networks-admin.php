@@ -16,11 +16,8 @@ class wp_Networks_Admin
 	function wp_Networks_Admin() {
 
 		/** load localization files if present */
-		if( file_exists( dirname( __FILE__ ) . '/' . dirname(plugin_basename(__FILE__)) . '-' . get_locale() . '.mo' ) ) {
-			load_plugin_textdomain( 'njsl-networks', false, dirname(plugin_basename(__FILE__)) );
-		} else if ( file_exists( dirname( __FILE__ ) . '/' . get_locale() . '.mo' ) ) {
-			_doing_it_wrong( 'load_textdomain', 'Please rename your translation files to use the ' . dirname(plugin_basename(__FILE__)) . '-' . get_locale() . '.mo' . ' format', '1.0.9' );
-			load_textdomain( 'njsl-networks', dirname( __FILE__ ) . '/' . get_locale() . '.mo' );
+		if( file_exists( dirname( __FILE__ ) . '/languages/' . dirname( plugin_basename( __FILE__ ) ) . '-' . get_locale() . '.mo' ) ) {
+			load_plugin_textdomain( 'njsl-networks', false, dirname( plugin_basename(__FILE__) ) . '/languages' );
 		}
 
 		add_action( 'network_admin_menu', array(&$this, 'networks_admin_menu') );
@@ -71,7 +68,10 @@ class wp_Networks_Admin
 		}
 		
 		/** Help for WP < 3.3 */
-		add_contextual_help($this->admin_page, $this->networks_help());
+		global $wp_version;
+		if ( version_compare( $wp_version, '3.3', '<' ) ) {
+			add_contextual_help($this->admin_page, $this->networks_help());
+		}
 		
 		add_action( 'load-' . $this->admin_page, array(&$this,'networks_help_screen') );
 		add_action( 'load-' . $this->admin_page, array(&$this,'networks_options_screen') );
@@ -153,8 +153,11 @@ class wp_Networks_Admin
 		} else if(isset($_GET['deleted'])) {
 			?><div id="message" class="updated fade"><p><?php _e('Network(s) deleted.','njsl-networks'); ?></p></div><?php
 		}
-
-		switch( $_GET[ 'action' ] ) {
+		
+		// get action safely
+		$action = isset($_GET['action']) ? $_GET['action'] : '';
+		
+		switch( $action ) {
 			case 'move':
 				$this->move_blog_page();
 				break;
@@ -271,7 +274,10 @@ class wp_Networks_Admin
 					break;
 			}
 	
-			if( $_GET[ 'order' ] == 'DESC' ) {
+			// get order safely
+			$order = isset($_GET['order']) ? $_GET['order'] : '';
+			
+			if( $order == 'DESC' ) {
 				$networks_query .= 'DESC';
 			} else {
 				$networks_query .= 'ASC';
@@ -358,7 +364,7 @@ class wp_Networks_Admin
 		<?php foreach($networks_columns as $col_name => $column_display_name) { ?>
 		        <th scope="col">
 		        	<?php if(in_array( $col_name, $sortable_networks_columns ) ) : ?>
-		        	<a href="<?php echo $this->listPage ?>&sortby=<?php echo urlencode( $column_display_name ) ?>&<?php if( $_GET[ 'sortby' ] == $column_display_name ) { if( $_GET[ 'order' ] == 'DESC' ) { echo "order=ASC&" ; } else { echo "order=DESC&"; } } ?>start=<?php echo $start ?>"><?php echo $column_display_name; ?></a>
+		        	<a href="<?php echo $this->listPage ?>&sortby=<?php echo urlencode( $column_display_name ) ?>&<?php if( $_GET[ 'sortby' ] == $column_display_name ) { if( $order == 'DESC' ) { echo "order=ASC&" ; } else { echo "order=DESC&"; } } ?>start=<?php echo $start ?>"><?php echo $column_display_name; ?></a>
 		        	<?php else: ?>
 		        	<?php echo $column_display_name; ?>
 		        	<?php endif; ?>
@@ -370,6 +376,7 @@ class wp_Networks_Admin
 		<?php
 		
 		if ($network_list) {
+			$class = '';
 			foreach ($network_list as $blog) { 
 				$network = $blog;
 				$class = ('alternate' == $class) ? '' : 'alternate';
@@ -435,17 +442,20 @@ class wp_Networks_Admin
 							break;
 						case 'sites':
 							?>
-							<td valign='top'><a href="http://<?php echo $blog['domain'] . $blog['blog_path'];?>wp-admin/<?php echo (strpos($this->listPage,'site') !== false) ? 'network/' . $this->sitesPage : $this->sitesPage ?>" title="<?php _e('Sites on this network','njsl-networks'); ?>"><?php echo $blog['blogs'] ?></a></td>
+							<td valign='top'><a href="<?php echo ( is_ssl() ? 'https' : 'http' ) ?>://<?php echo $blog['domain'] . $blog['blog_path'];?>wp-admin/<?php echo (strpos($this->listPage,'site') !== false) ? 'network/' . $this->sitesPage : $this->sitesPage ?>" title="<?php _e('Go to this network to manage its sites','njsl-networks'); ?>"><?php echo $blog['blogs'] ?></a></td>
 							<?php
 							break;
 						case 'admins':
-							$admins = maybe_unserialize( $blog['site_admins']);
+							$admins = maybe_unserialize( $blog['site_admins'] );
 							?>
 							<td valign='top'>
 							<?php foreach($admins as $admin) : ?>
-								<?php $this_admin = get_user_by( 'login', $admin ); ?>
+								<?php $this_admin = get_user_by( 'login', $admin );
+								if ( $this_admin ) : ?>
 								<a href="<?php echo esc_url( network_admin_url( add_query_arg( 'wp_http_referer', urlencode( stripslashes( $_SERVER['REQUEST_URI'] ) ), 'user-edit.php?user_id=' . $this_admin->ID ) ) ) ?>"><?php echo $this_admin->user_login ?></a><br />
-							<?php endforeach; ?>
+							<?php 
+								endif;
+							endforeach; ?>
 							</td>
 							<?php
 						default:
@@ -639,7 +649,7 @@ jQuery('.postbox').children('h3').click(function() {
 				}
 			}
 			?>
-			<h2><?php echo __('Moving','njsl-networks') . ' ' . stripslashes($details->option_value); ?></h2>
+			<h2><?php echo __('Moving','njsl-networks') . ' ' . stripslashes($details->option_value) . ' (<a href="' . get_home_url( $blog->blog_id ) . '">' . $blog->domain . $blog->path . '</a>)'; ?></h2>
 			<form method="post" action="<?php echo $_SERVER['REQUEST_URI']; ?>">
 				<table class="widefat">
 					<thead>
@@ -676,7 +686,7 @@ jQuery('.postbox').children('h3').click(function() {
 				<?php } ?>
 				<div>
 					<input type="hidden" name="from" value="<?php echo $blog->site_id; ?>" />
-					<input class="button" type="submit" name="move" value="<?php _e('Move Site','njsl-networks'); ?>" />
+					<?php submit_button( __('Move Site','njsl-networks'), 'primary','move', false ); ?>
 					<a class="button" href="<?php echo $this->sitesPage ?>"><?php _e('Cancel','njsl-networks'); ?></a>
 				</div>
 			</form>
@@ -724,14 +734,15 @@ jQuery('.postbox').children('h3').click(function() {
 		} else {
 			
 			// get site by id
-			$query = "SELECT *, {$wpdb->sitemeta}.meta_value as site_name FROM {$wpdb->site} " . " LEFT JOIN {$wpdb->sitemeta} ON {$wpdb->sitemeta}.meta_key='site_name' AND {$wpdb->sitemeta}.site_id = {$wpdb->site}.id WHERE id=" . (int)$_GET['id'];
+			$query = $wpdb->prepare( "SELECT *, {$wpdb->sitemeta}.meta_value as site_name FROM {$wpdb->site} " . " LEFT JOIN {$wpdb->sitemeta} ON {$wpdb->sitemeta}.meta_key='site_name' AND {$wpdb->sitemeta}.site_id = {$wpdb->site}.id WHERE id=%d", $_GET['id'] );
 			$site = $wpdb->get_row($query);
-			if(!$site) {
-				wp_die(__('Invalid network ID selected','njsl-networks'));
+			if( ! $site ) {
+				wp_die( __( 'Invalid network ID selected', 'njsl-networks' ) );
 			}
+			
 			$blogs = $wpdb->get_results("SELECT * FROM {$wpdb->blogs}");
-			if(!$blogs) {
-				wp_die(__('Blogs table is inaccessible.','njsl-networks'));
+			if( ! $blogs ) {
+				wp_die( __( 'Blogs table is inaccessible.', 'njsl-networks' ) );
 			}
 			foreach($blogs as $key => $blog) {
 				$tableName = $wpdb->get_blog_prefix( $blog->blog_id ) . 'options';
@@ -746,6 +757,11 @@ jQuery('.postbox').children('h3').click(function() {
 					$blogs[$key]->name = stripslashes($blog_name->option_value);
 				}
 			}
+			
+			// Extend the select box based on the number of blogs, but with a minimum
+			$select_height = floor( count($blogs) );
+			if( $select_height < 10 )	$select_height = 10;
+			
 			?>
 			<div class="wrap">
 				<div class="icon32" id="icon-ms-admin"><br></div>
@@ -754,48 +770,48 @@ jQuery('.postbox').children('h3').click(function() {
 					<div id="message" class="updated hide-if-js"><p><?php printf( __('Select the sites you want to assign to this network from the column at left, and click "%s."','njsl-networks'),__('Update Assignments','njsl-networks')); ?></p></div>
 				</noscript>
 				<form method="post" action="<?php echo $_SERVER['REQUEST_URI']; ?>" id="site-assign-form">
-				<table class="widefat">
-					<thead>
+					<table class="widefat">
+						<thead>
+							<tr>
+								<th><?php _e('Available','njsl-networks'); ?></th>
+								<th style="width: 2em;"></th>
+								<th><?php _e('Assigned','njsl-networks'); ?></th>
+							</tr>
+						</thead>
 						<tr>
-							<th><?php _e('Available','njsl-networks'); ?></th>
-							<th style="width: 2em;"></th>
-							<th><?php _e('Assigned','njsl-networks'); ?></th>
+							<td>
+								<select name="from[]" id="from" multiple style="height: <?php echo $select_height ?>em; width: 98%">
+								<?php
+									foreach($blogs as $blog) {
+										if($blog->site_id != $site->id) echo '<option value="' . $blog->blog_id . '">' . $blog->name  . ' ( ' . $blog->domain . $blog->path . ' )</option>';
+									}
+								?>
+								</select>
+							</td>
+							<td>
+								<input type="button" name="unassign" id="unassign" value="<<" /><br />
+								<input type="button" name="assign" id="assign" value=">>" />
+							</td>
+							<td valign="top">
+								<?php if(!ENABLE_HOLDING_SITE) { ?><ul style="margin: 0; padding: 0; list-style-type: none;">
+									<?php foreach($blogs as $blog) { 
+										if ($blog->site_id == $site->id) { ?>
+										<li><?php echo $blog->name . ' (' . $blog->domain . ')'; ?></li>
+									<?php } } ?>
+								</ul><?php } ?>
+								<select name="to[]" id="to" multiple style="height: <?php echo $select_height ?>em; width: 98%">
+								<?php
+								if(ENABLE_HOLDING_SITE) {
+									foreach($blogs as $blog) {
+										if($blog->site_id == $site->id) echo '<option value="' . $blog->blog_id . '">' . $blog->name . ' ( ' . $blog->domain . $blog->path . ' )</option>';
+									}
+								}
+								?>
+								</select>
+							</td>
 						</tr>
-					</thead>
-					<tr>
-						<td>
-							<select name="from[]" id="from" multiple style="height: auto; width: 98%">
-							<?php
-								foreach($blogs as $blog) {
-									if($blog->site_id != $site->id) echo '<option value="' . $blog->blog_id . '">' . $blog->name  . ' (' . $blog->domain . ')</option>';
-								}
-							?>
-							</select>
-						</td>
-						<td>
-							<input type="button" name="unassign" id="unassign" value="<<" /><br />
-							<input type="button" name="assign" id="assign" value=">>" />
-						</td>
-						<td valign="top">
-							<?php if(!ENABLE_HOLDING_SITE) { ?><ul style="margin: 0; padding: 0; list-style-type: none;">
-								<?php foreach($blogs as $blog) { 
-									if ($blog->site_id == $site->id) { ?>
-									<li><?php echo $blog->name . ' (' . $blog->domain . ')'; ?></li>
-								<?php } } ?>
-							</ul><?php } ?>
-							<select name="to[]" id="to" multiple style="height: auto; width: 98%">
-							<?php
-							if(ENABLE_HOLDING_SITE) {
-								foreach($blogs as $blog) {
-									if($blog->site_id == $site->id) echo '<option value="' . $blog->blog_id . '">' . $blog->name . ' (' . $blog->domain . ')</option>';
-								}
-							}
-							?>
-							</select>
-						</td>
-					</tr>
-				</table>
-				<br class="clear" />
+					</table>
+					<br class="clear" />
 					<?php if(has_action('add_move_blog_option')) { ?>
 					<table class="widefat">
 						<thead>
@@ -805,8 +821,8 @@ jQuery('.postbox').children('h3').click(function() {
 					</table>
 					<br />
 					<?php } ?>
-				<input type="submit" name="reassign" value="<?php _e('Update Assignments','njsl-networks'); ?>" class="button" />
-				<a href="<?php echo $this->listPage ?>"><?php _e('Cancel'); ?></a>
+					<?php submit_button( __('Update Assignments','njsl-networks'), 'primary', 'reassign', false ); ?>
+					<a class="button" href="<?php echo $this->listPage ?>"><?php _e('Cancel'); ?></a>
 				</form>
 				<script type="text/javascript">
 					
@@ -930,8 +946,8 @@ jQuery('.postbox').children('h3').click(function() {
 					<?php } ?>
 					<p>
 						<input type="hidden" name="siteId" value="<?php echo $site->id; ?>" />
-						<input class="button" type="submit" name="update" value="<?php _e('Update Network','njsl-networks'); ?>" />
-						<a href="<?php echo $this->listPage ?>"><?php _e('Cancel','njsl-networks'); ?></a>
+						<?php submit_button( __('Update Network','njsl-networks'), 'primary', 'update', false ); ?>
+						<a class="button" href="<?php echo $this->listPage ?>"><?php _e('Cancel','njsl-networks'); ?></a>
 					</p>
 				</form>
 			</div>
@@ -990,8 +1006,8 @@ jQuery('.postbox').children('h3').click(function() {
 <?php	} ?>
 <?php } ?>
 					<p><?php _e('Are you sure you want to delete this network?','njsl-networks'); ?></p>
-					<input type="submit" name="delete" value="<?php _e('Delete Network','njsl-networks'); ?>" class="button" /> 
-					<a href="<?php echo $this->listPage ?>"><?php _e('Cancel','njsl-networks'); ?></a>
+					<?php submit_button( __('Delete Network','njsl-networks'), 'primary', 'delete', false ); ?>
+					<a class="button" href="<?php echo $this->listPage ?>"><?php _e('Cancel','njsl-networks'); ?></a>
 				</div>
 			</form>
 			<?php
@@ -1101,7 +1117,8 @@ jQuery('.postbox').children('h3').click(function() {
 			}
 			?>
 				<p><?php _e('Are you sure you want to delete these networks?','njsl-networks'); ?></p>
-				<input type="submit" name="delete_multiple" value="<?php _e('Delete Networks','njsl-networks'); ?>" class="button" /> <input type="submit" name="cancel" value="<?php _e('Cancel','njsl-networks'); ?>" class="button" />
+				<?php submit_button( __('Delete Networks','njsl-networks'), 'primary', 'delete_multiple', false ); ?> 
+				<input type="submit" name="cancel" value="<?php _e('Cancel','njsl-networks'); ?>" class="button" />
 			</div></form>
 			<?php
 		}
