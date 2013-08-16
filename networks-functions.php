@@ -55,12 +55,13 @@ if(!function_exists('switch_to_site')) {
 
 		// backup
 		$tmpoldsitedetails[ 'site_id' ] 	= $site_id;
+		$tmpoldsitedetails[ 'blog_id' ]     = $current_site->blog_id;
 		$tmpoldsitedetails[ 'id']			= $current_site->id;
 		$tmpoldsitedetails[ 'domain' ]		= $current_site->domain;
 		$tmpoldsitedetails[ 'path' ]		= $current_site->path;
 		$tmpoldsitedetails[ 'site_name' ]	= $current_site->site_name;
 
-		
+		// All site info is pre-fetched into the $sites global -- just pull out the one we want
 		foreach($sites as $site) {
 			if($site->id == $new_site) {
 				$current_site = $site;
@@ -69,6 +70,14 @@ if(!function_exists('switch_to_site')) {
 		}
 
 		$wpdb->siteid			 = $new_site;
+		$current_site->blog_id   = $wpdb->get_var( 
+			$wpdb->prepare( 
+				'SELECT blog_id FROM ' . $wpdb->blogs . ' WHERE site_id=%d AND domain=%s AND path=%s',
+				$new_site,
+				$current_site->domain,
+				$current_site->path
+			)
+		);
 		$current_site->site_name = get_site_option('site_name');
 		$site_id = $new_site;
 
@@ -104,6 +113,7 @@ if(!function_exists('restore_current_site')) {
 		$current_site->domain = $tmpoldsitedetails[ 'domain' ];
 		$current_site->path = $tmpoldsitedetails[ 'path' ];
 		$current_site->site_name = $tmpoldsitedetails[ 'site_name' ];
+		$current_site->blog_id = $tmpoldsitedetails[ 'blog_id' ];
 
 		unset( $tmpoldsitedetails );
 
@@ -194,6 +204,48 @@ if (!function_exists('add_site')) {
 				if(is_a($new_blog_id,'WP_Error')) {
 					return $new_blog_id;
 				}
+				
+				// Fix upload_path for main sites on secondary networks
+				// This applies only to new installs (WP 3.5+)
+
+				// Switch to main network (if it exists)
+				if( site_exists( 1 ) ) {
+					switch_to_site( 1 );
+					$use_files_rewriting = get_site_option( 'ms_files_rewriting' );
+					restore_current_site();
+				} else {
+					$use_files_rewriting = get_site_option( 'ms_files_rewriting' );
+				}
+				
+				// Create the upload_path and upload_url_path values
+				if( ! $use_files_rewriting ) {
+
+					// WP_CONTENT_URL is locked to the current site and can't be overridden,
+					//  so we have to replace the hostname the hard way
+					$current_siteurl = get_option('siteurl');
+					$new_siteurl = untrailingslashit( get_blogaddress_by_id( $new_blog_id ) );
+					$upload_url = str_replace( $current_siteurl, $new_siteurl, WP_CONTENT_URL );
+					$upload_url = $upload_url . '/uploads';
+					
+					$upload_dir = WP_CONTENT_DIR;
+					if( 0 === strpos( $upload_dir, ABSPATH ) ) {
+						$upload_dir = substr( $upload_dir, strlen( ABSPATH ) );
+					}
+					$upload_dir .= '/uploads';
+					
+					if ( defined( 'MULTISITE' ) )
+						$ms_dir = '/sites/' . $new_blog_id;
+					else
+						$ms_dir = '/' . $new_blog_id;
+					
+					$upload_dir .= $ms_dir;
+					$upload_url .= $ms_dir;
+					
+					update_blog_option( $new_blog_id, 'upload_path', $upload_dir );
+					update_blog_option( $new_blog_id, 'upload_url_path', $upload_url );
+					
+				}
+				
 			}
 		}
 		
@@ -221,7 +273,13 @@ if (!function_exists('add_site')) {
 					if(in_array($option, $url_dependent_site_options)) {
 						$optionsCache[$option] = str_replace($oldsite_domain . $oldsite_path, $domain . $path, $optionsCache[$option]);
 					}
-					add_site_option($option, $optionsCache[$option]);
+					
+					// Fix for strange bug that prevents writing the ms_files_rewriting value for new networks
+					if( $option == 'ms_files_rewriting' ) {
+						$wpdb->insert( $wpdb->sitemeta, array('site_id' => $wpdb->siteid, 'meta_key' => $option, 'meta_value' => $optionsCache[$option] ) );
+					} else {
+						add_site_option($option, $optionsCache[$option]);
+					}
 				}
 			}
 			unset($optionsCache);
@@ -244,11 +302,11 @@ if (!function_exists('update_site')) {
 	 * @param integer id ID of site to modify
 	 * @param string $domain new domain for site
 	 * @param string $path new path for site
+	 * @param array $meta meta keys and values to be updated
 	 */
-	function update_site($id, $domain, $path='') {
+	function update_site($id, $domain, $path='', $meta = null ) {
 
-		global $wpdb;
-		global $url_dependent_blog_options;
+		global $wpdb, $url_dependent_blog_options, $wp_version;
 
 		if(!site_exists((int)$id)) {
 			return new WP_Error('site_not_exist',__('Network does not exist.','njsl-networks'));
@@ -268,10 +326,31 @@ if (!function_exists('update_site')) {
 		$where = array('id'	=> (int)$id);
 		$update_result = $wpdb->update($wpdb->site,$update,$where);
 
-		if(!$update_result) {
+		if( false === $update_result ) {
 			return new WP_Error('site_not_updatable',__('Network could not be updated.','njsl-networks'));
 		}
 
+		if( ! empty( $meta ) && is_array( $meta ) ) {
+			
+			switch_to_site( $id );
+			
+			foreach( $meta as $option => $value ) {
+				
+				if( false === update_site_option( $option, $value ) ) {
+					$wpdb->insert( $wpdb->sitemeta, array('site_id' => $wpdb->siteid, 'meta_key' => $option, 'meta_value' => $value ) );
+				}
+				
+			}
+			
+			restore_current_site();
+				
+		}
+		
+		// No URL values updated -- quit before needlessly 
+		//   processing a bunch of URL-specific values and triggering hooks
+		if( ! $update_result )
+			return;
+		
 		$path = (($path != '') ? $path : $site->path );
 		$fullPath = $domain . $path;
 		$oldPath = $site->domain . $site->path;
@@ -295,6 +374,7 @@ if (!function_exists('update_site')) {
 				$optionTable = $wpdb->get_blog_prefix( $blog->blog_id ) . 'options';
 
 				foreach($url_dependent_blog_options as $option_name) {
+					// TODO: pop upload_url_path off list if ms_files_rewriting is disabled
 					$option_value = $wpdb->get_row("SELECT * FROM $optionTable WHERE option_name='$option_name'");
 					if($option_value) {
 						$newValue = str_replace($oldPath,$fullPath,$option_value->option_value);
